@@ -1,0 +1,48 @@
+name: 자동 CHANGELOG 생성
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  generate-changelog:
+    runs-on: [self-hosted, common]
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 전체 히스토리를 가져와서 이전 릴리즈와 비교
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: pnpm 설치
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 의존성 설치
+        run: pnpm install
+
+      - name: 빌드
+        run: pnpm run build
+
+      - name: CHANGELOG 생성 및 업데이트
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || 'llama3.1:latest' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: pnpm run start
+
+      - name: 완료 알림
+        if: success()
+        run: echo "✅ CHANGELOG가 성공적으로 생성되어 릴리즈에 추가되었습니다."
+
+      - name: 실패 알림
+        if: failure()
+        run: echo "❌ CHANGELOG 생성 중 오류가 발생했습니다."

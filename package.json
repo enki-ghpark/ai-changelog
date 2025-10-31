@@ -1,0 +1,36 @@
+{
+  "name": "github-auto-changelog",
+  "version": "1.0.0",
+  "description": "GitHub 릴리즈 자동 CHANGELOG 생성 봇",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:act": "act release -e test-event.json --secret-file .secrets --var-file .vars",
+    "update-test-event": "bash scripts/update-test-event.sh"
+  },
+  "keywords": [
+    "github",
+    "changelog",
+    "automation",
+    "ollama",
+    "langchain"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/ollama": "^0.1.0",
+    "@octokit/rest": "^21.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}
