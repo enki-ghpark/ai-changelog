@@ -1,20 +1,70 @@
 import { Ollama } from "@langchain/ollama";
+import { PromptTemplate } from "@langchain/core/prompts";
+import { RunnableSequence, RunnableLambda } from "@langchain/core/runnables";
+import { StringOutputParser } from "@langchain/core/output_parsers";
+import type { VectorStoreRetriever } from "@langchain/core/vectorstores";
 import type {
   ChangelogData,
   EnhancedChangelogData,
-  GeneratedChangelog,
   OllamaConfig,
   FileChange,
 } from "../types.js";
 
 export class ChangelogGenerator {
   private llm: Ollama;
+  private enhancedPrompt: PromptTemplate;
 
   constructor(config: OllamaConfig) {
     this.llm = new Ollama({
       baseUrl: config.baseUrl,
       model: config.model,
     });
+
+    // 향상된 CHANGELOG 프롬프트 템플릿
+    this.enhancedPrompt =
+      PromptTemplate.fromTemplate(`당신은 소프트웨어 릴리즈 노트를 작성하는 전문가입니다.
+다음 릴리즈 정보를 바탕으로 사용자 친화적이고 명확한 CHANGELOG를 한국어로 작성해주세요.
+
+**중요**: 
+1. 파일 변경사항을 분석하여 실제로 무엇이 바뀌었는지 구체적으로 설명해주세요.
+2. 영향 분석을 참고하여 이번 변경이 다른 부분에 미칠 수 있는 영향도 언급해주세요.
+3. 단순히 커밋 메시지를 나열하는 것이 아니라, 코드 변경의 의미와 영향을 사용자 관점에서 설명해주세요.
+
+변경사항을 다음 카테고리로 분류하세요:
+- 🎉 새로운 기능 (Features): 새로 추가된 기능
+- 🐛 버그 수정 (Bug Fixes): 수정된 버그
+- ⚠️ Breaking Changes: 기존 사용자에게 영향을 줄 수 있는 변경사항
+- 🔄 영향 범위: 이번 변경으로 영향받을 수 있는 다른 부분들
+- 📝 기타 (Other): 문서 업데이트, 리팩토링, 테스트 등
+
+릴리즈 정보:
+{release_info}
+
+파일 변경사항:
+{file_changes}
+
+영향 분석 (RAG 기반):
+{impact_analysis}
+
+다음 형식으로 CHANGELOG를 작성해주세요:
+
+## 🎉 새로운 기능
+- [항목이 있으면 여기에 나열]
+
+## 🐛 버그 수정
+- [항목이 있으면 여기에 나열]
+
+## ⚠️ Breaking Changes
+- [항목이 있으면 여기에 나열]
+
+## 🔄 영향 범위
+- [영향 분석에서 발견된 잠재적 영향이 있으면 사용자 관점에서 간결하게 요약]
+
+## 📝 기타 변경사항
+- [항목이 있으면 여기에 나열]
+
+---
+*이 CHANGELOG는 AI에 의해 자동 생성되었습니다.*`);
   }
 
   /**
@@ -119,106 +169,184 @@ export class ChangelogGenerator {
   }
 
   /**
+   * 식별자 추출 (기존 RAGService 로직 이동)
+   */
+  private extractIdentifiers(fileChange: FileChange): string[] {
+    const identifiers: string[] = [];
+
+    if (!fileChange.patch && !fileChange.content) {
+      return identifiers;
+    }
+
+    const text = fileChange.patch || fileChange.content || "";
+
+    const functionPatterns = [
+      /(?:function|const|let|var|async)\s+(\w+)/g,
+      /(\w+)\s*[=:]\s*(?:async\s*)?\([^)]*\)\s*=>/g,
+      /(?:export\s+)?(?:async\s+)?function\s+(\w+)/g,
+      /(?:public|private|protected)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*[{:]/g,
+      /def\s+(\w+)/g,
+      /func\s+(\w+)/g,
+    ];
+
+    const typePatterns = [
+      /(?:class|interface|type|enum)\s+(\w+)/g,
+      /(?:struct|trait)\s+(\w+)/g,
+    ];
+
+    const importPatterns = [
+      /(?:import|export)\s+.*?\{\s*([^}]+)\s*\}/g,
+      /(?:import|export)\s+(\w+)/g,
+    ];
+
+    [...functionPatterns, ...typePatterns, ...importPatterns].forEach(
+      (pattern) => {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          const identifier = match[1];
+          if (
+            identifier &&
+            identifier.length > 2 &&
+            !identifiers.includes(identifier)
+          ) {
+            identifiers.push(identifier);
+          }
+        }
+      }
+    );
+
+    return identifiers.slice(0, 20);
+  }
+
+  /**
+   * 영향 분석 결과 포맷팅
+   */
+  private formatImpactDocs(impactDocs: string[]): string {
+    if (impactDocs.length === 0) {
+      return "영향 분석 결과 없음";
+    }
+
+    let result = "다음 파일들이 이번 변경사항의 영향을 받을 수 있습니다:\n\n";
+    for (const impact of impactDocs.slice(0, 10)) {
+      result += `- ${impact}\n`;
+    }
+    result +=
+      "\n**주의**: 위 파일들도 함께 검토하고 테스트하는 것을 권장합니다.";
+    return result;
+  }
+
+  /**
+   * RAG-LLM 통합 체인을 생성합니다
+   */
+  private async createEnhancedChain(
+    data: EnhancedChangelogData,
+    retriever: VectorStoreRetriever
+  ) {
+    // 1. 식별자 추출 함수
+    const extractIdentifiersStep = RunnableLambda.from(
+      async (input: EnhancedChangelogData) => {
+        console.log("🔍 변경된 파일에서 식별자 추출 중...");
+        const identifiers: string[] = [];
+
+        const topFiles = input.fileChanges
+          .filter((f) => f.content || f.patch)
+          .sort((a, b) => b.changes - a.changes)
+          .slice(0, 10);
+
+        for (const file of topFiles) {
+          const fileIdentifiers = this.extractIdentifiers(file);
+          identifiers.push(...fileIdentifiers.slice(0, 5));
+        }
+
+        console.log(`   발견된 식별자: ${identifiers.length}개`);
+        return { data: input, identifiers };
+      }
+    );
+
+    // 2. RAG 검색 함수
+    const ragSearchStep = RunnableLambda.from(
+      async (input: { data: EnhancedChangelogData; identifiers: string[] }) => {
+        console.log("🔎 RAG 검색 중...");
+        const impactDocs: string[] = [];
+        const affectedFiles = new Set<string>();
+
+        for (const identifier of input.identifiers) {
+          try {
+            const docs = await retriever.getRelevantDocuments(identifier);
+
+            for (const doc of docs) {
+              const foundFile = doc.metadata.filename;
+              const sourceFiles = input.data.fileChanges.map((f) => f.filename);
+
+              // 변경된 파일 자체는 제외
+              if (
+                foundFile &&
+                !sourceFiles.includes(foundFile) &&
+                !affectedFiles.has(foundFile)
+              ) {
+                affectedFiles.add(foundFile);
+
+                const impact = `**${identifier}** → \`${foundFile}\`에서 사용됨`;
+                impactDocs.push(impact);
+
+                if (impactDocs.length >= 15) break;
+              }
+            }
+            if (impactDocs.length >= 15) break;
+          } catch (error) {
+            console.warn(`  ⚠️  ${identifier} 검색 실패:`, error);
+          }
+        }
+
+        console.log(`   발견된 영향: ${affectedFiles.size}개 파일`);
+        return { data: input.data, impactDocs };
+      }
+    );
+
+    // 3. 프롬프트 입력 준비
+    const preparePromptStep = RunnableLambda.from(
+      (input: { data: EnhancedChangelogData; impactDocs: string[] }) => {
+        console.log("📝 프롬프트 준비 중...");
+
+        return {
+          release_info: this.formatChangelogData(input.data),
+          file_changes: this.formatFileChanges(input.data.fileChanges),
+          impact_analysis: this.formatImpactDocs(input.impactDocs),
+        };
+      }
+    );
+
+    // 4. 전체 체인 구성
+    return RunnableSequence.from([
+      extractIdentifiersStep,
+      ragSearchStep,
+      preparePromptStep,
+      this.enhancedPrompt,
+      this.llm,
+      new StringOutputParser(),
+    ]);
+  }
+
+  /**
    * 향상된 CHANGELOG 생성 (파일 변경 및 RAG 컨텍스트 포함)
    */
-  async generateEnhanced(data: EnhancedChangelogData): Promise<string> {
-    console.log("🤖 AI를 사용하여 향상된 CHANGELOG 생성 중...");
+  async generateEnhanced(
+    data: EnhancedChangelogData,
+    retriever: VectorStoreRetriever
+  ): Promise<string> {
+    console.log("🤖 RAG-LLM 체인 실행 중...");
 
-    const formattedData = this.formatChangelogData(data);
-    const formattedFiles = this.formatFileChanges(data.fileChanges);
+    const chain = await this.createEnhancedChain(data, retriever);
+    const result = await chain.invoke(data);
 
-    // 영향 분석 포맷팅
-    console.log(`📊 RAG 컨텍스트: ${data.codeContext.length}개 항목`);
-
-    let impactAnalysis = "";
-    if (data.codeContext.length > 0) {
-      impactAnalysis = `\n## 🔍 영향 분석 (RAG 기반)\n\n`;
-      impactAnalysis += `다음 파일들이 이번 변경사항의 영향을 받을 수 있습니다:\n\n`;
-      for (const impact of data.codeContext.slice(0, 10)) {
-        impactAnalysis += `${impact}\n\n`;
-      }
-      impactAnalysis += `\n**주의**: 위 파일들도 함께 검토하고 테스트하는 것을 권장합니다.\n`;
-
-      console.log(
-        `📝 영향 분석 프롬프트 생성 완료 (${impactAnalysis.length}자)`
-      );
-    } else {
-      console.log(
-        "⚠️  RAG 컨텍스트가 비어있습니다. 영향 분석 없이 진행합니다."
-      );
-    }
-
-    const prompt = `당신은 소프트웨어 릴리즈 노트를 작성하는 전문가입니다. 
-다음 릴리즈 정보를 바탕으로 사용자 친화적이고 명확한 CHANGELOG를 한국어로 작성해주세요.
-
-**중요**: 
-1. 파일 변경사항을 분석하여 실제로 무엇이 바뀌었는지 구체적으로 설명해주세요.
-2. 영향 분석을 참고하여 이번 변경이 다른 부분에 미칠 수 있는 영향도 언급해주세요.
-3. 단순히 커밋 메시지를 나열하는 것이 아니라, 코드 변경의 의미와 영향을 사용자 관점에서 설명해주세요.
-
-변경사항을 다음 카테고리로 분류하세요:
-- 🎉 새로운 기능 (Features): 새로 추가된 기능
-- 🐛 버그 수정 (Bug Fixes): 수정된 버그
-- ⚠️ Breaking Changes: 기존 사용자에게 영향을 줄 수 있는 변경사항
-- 🔄 영향 범위: 이번 변경으로 영향받을 수 있는 다른 부분들
-- 📝 기타 (Other): 문서 업데이트, 리팩토링, 테스트 등
-
-각 항목은 간결하고 명확하게 작성하며, 사용자가 이해하기 쉽게 설명해주세요.
-기술적인 세부사항보다는 사용자 입장에서의 변화를 중심으로 작성해주세요.
-
-릴리즈 정보:
-${formattedData}
-
-${formattedFiles}
-
-${impactAnalysis}
-
-다음 형식으로 CHANGELOG를 작성해주세요:
-
-## 🎉 새로운 기능
-- [항목이 있으면 여기에 나열]
-
-## 🐛 버그 수정
-- [항목이 있으면 여기에 나열]
-
-## ⚠️ Breaking Changes
-- [항목이 있으면 여기에 나열]
-
-## 🔄 영향 범위
-- [영향 분석에서 발견된 잠재적 영향이 있으면 사용자 관점에서 간결하게 요약]
-- [예: "이 변경으로 인해 X 기능을 사용하는 코드도 영향을 받을 수 있습니다"]
-
-## 📝 기타 변경사항
-- [항목이 있으면 여기에 나열]
-
----
-*이 CHANGELOG는 AI에 의해 자동 생성되었습니다.*`;
-
-    // 디버깅: 프롬프트 길이 출력
-    console.log(`📤 LLM에 전달하는 프롬프트 길이: ${prompt.length}자`);
-    if (data.codeContext.length > 0) {
-      console.log(`   → 영향 분석 포함: ${data.codeContext.length}개 항목`);
-    }
-
-    try {
-      const response = await this.llm.invoke(prompt);
-      console.log("✅ CHANGELOG 생성 완료");
-      return response;
-    } catch (error) {
-      console.error("CHANGELOG 생성 실패", error);
-      throw new Error(`CHANGELOG 생성 중 오류 발생: ${error}`);
-    }
+    console.log("✅ CHANGELOG 생성 완료");
+    return result;
   }
 
   /**
    * LLM을 사용하여 CHANGELOG를 생성합니다 (기본 버전)
    */
   async generate(data: ChangelogData): Promise<string> {
-    // EnhancedChangelogData가 아닌 경우 기본 생성기 사용
-    if ("fileChanges" in data && "codeContext" in data) {
-      return this.generateEnhanced(data as EnhancedChangelogData);
-    }
-
     console.log("🤖 AI를 사용하여 CHANGELOG 생성 중...");
 
     const formattedData = this.formatChangelogData(data);

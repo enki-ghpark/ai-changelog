@@ -518,6 +518,17 @@ export class RAGService {
   }
 
   /**
+   * LangChain Retriever를 반환합니다
+   */
+  getRetriever(k: number = 3) {
+    if (!this.vectorStore) {
+      throw new Error("벡터 스토어가 초기화되지 않았습니다");
+    }
+
+    return this.vectorStore.asRetriever({ k });
+  }
+
+  /**
    * 벡터 스토어 초기화 (메모리 해제)
    */
   clear(): void {

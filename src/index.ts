@@ -1,7 +1,13 @@
 import { GitHubService } from "./utils/github.js";
 import { ChangelogGenerator } from "./utils/changelog.js";
 import { RAGService } from "./utils/rag.js";
-import type { GitHubConfig, OllamaConfig, RAGConfig } from "./types.js";
+import type {
+  GitHubConfig,
+  OllamaConfig,
+  RAGConfig,
+  ChangelogData,
+  EnhancedChangelogData,
+} from "./types.js";
 
 async function main() {
   console.log("🚀 GitHub 자동 CHANGELOG 생성 시작\n");
@@ -69,7 +75,7 @@ async function main() {
     console.log(`✅ 릴리즈 발견: ${release.name || release.tag_name}\n`);
 
     // 향상된 변경사항 데이터 수집 (파일 변경 포함)
-    let changelogData;
+    let changelogData: ChangelogData | EnhancedChangelogData;
     let ragService: RAGService | null = null;
 
     if (enableRAG) {
@@ -100,18 +106,12 @@ async function main() {
 
         if (allCodeFiles.length > 0) {
           await ragService.indexFiles(allCodeFiles);
-
-          // 변경된 파일을 기반으로 코드 컨텍스트 생성 (전체 코드베이스에서 검색)
-          changelogData.codeContext = await ragService.generateCodeContext(
-            changelogData.fileChanges
-          );
+          console.log("✅ RAG 시스템 색인 완료");
         } else {
           console.warn("⚠️  색인할 코드 파일을 찾을 수 없습니다");
-          changelogData.codeContext = [];
         }
       } catch (error) {
         console.warn("⚠️  RAG 색인 실패, 파일 정보만 사용합니다", error);
-        changelogData.codeContext = [];
       }
     } else {
       // RAG를 사용하지 않는 경우 기본 데이터 수집
@@ -126,9 +126,29 @@ async function main() {
     console.log();
 
     // CHANGELOG 생성
-    const changelog = await changelogGenerator.generateWithFallback(
-      changelogData
-    );
+    let changelog: string;
+    if (
+      enableRAG &&
+      ragService &&
+      "fileChanges" in changelogData &&
+      "codeContext" in changelogData
+    ) {
+      try {
+        const retriever = ragService.getRetriever(3);
+        changelog = await changelogGenerator.generateEnhanced(
+          changelogData as EnhancedChangelogData,
+          retriever
+        );
+      } catch (error) {
+        console.warn(
+          "⚠️  RAG 기반 CHANGELOG 생성 실패, 기본 생성기 사용",
+          error
+        );
+        changelog = await changelogGenerator.generate(changelogData);
+      }
+    } else {
+      changelog = await changelogGenerator.generate(changelogData);
+    }
     console.log("\n📝 생성된 CHANGELOG:\n");
     console.log("─".repeat(80));
     console.log(changelog);
