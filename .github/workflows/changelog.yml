@@ -24,6 +24,15 @@ jobs:
         with:
           version: 9
 
+      - name: RAG 임베딩 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .cache/embeddings
+          key: embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.run_id }}
+          restore-keys: |
+            embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-
+            embeddings-cache-
+
       - name: 의존성 설치
         run: pnpm install
 
@@ -35,6 +44,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || 'llama3.1:latest' }}
+          OLLAMA_EMBEDDING_MODEL: ${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}
+          ENABLE_RAG: ${{ vars.ENABLE_RAG || 'true' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: pnpm run start

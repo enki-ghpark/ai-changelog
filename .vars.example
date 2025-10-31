@@ -1,2 +1,2 @@
 OLLAMA_MODEL=llama3.1:latest
-
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text

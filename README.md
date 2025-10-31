@@ -5,17 +5,22 @@ GitHub 릴리즈가 발행될 때 자동으로 변경사항을 분석하고, Oll
 ## ✨ 주요 기능
 
 - 🤖 **AI 기반 CHANGELOG 생성**: LangChain과 Ollama를 사용하여 지능적으로 변경사항을 분석하고 카테고리화
+- 📄 **파일 변경 분석**: 실제 파일 변경 내용(diff)을 분석하여 더 정확한 CHANGELOG 생성
+- 🔍 **RAG 영향 분석**: 변경된 코드가 영향을 미치는 다른 파일들을 자동으로 찾아 CHANGELOG에 포함
+- 💾 **임베딩 캐싱**: 파일 해시 기반으로 임베딩 벡터를 캐싱하여 두 번째 실행부터 **10-60배 빠른 성능**
 - 📦 **자동 릴리즈 분석**: 이전 릴리즈와 현재 릴리즈 사이의 모든 커밋과 PR을 자동으로 수집
 - 🏷️ **PR 라벨 인식**: Pull Request의 라벨을 기반으로 변경사항을 자동 분류
 - 🔄 **폴백 메커니즘**: AI 생성 실패 시 기본 CHANGELOG로 자동 전환
+- ⚡ **성능 최적화**: 병렬 API 호출, 파일 크기 제한, 배치 임베딩, GitHub Actions 캐싱
 - 🧪 **완전한 테스트 커버리지**: Vitest를 사용한 유닛 테스트 포함
 
 ## 🛠️ 기술 스택
 
 - **TypeScript**: 타입 안정성을 갖춘 개발
 - **Octokit**: GitHub API 통합
-- **LangChain**: AI 체인 구성
-- **Ollama**: 로컬/원격 LLM 실행
+- **LangChain**: AI 체인 구성 및 RAG 시스템
+- **Ollama**: 로컬/원격 LLM 실행 (LLM + 임베딩 모델)
+- **Vector Store**: 메모리 기반 벡터 검색
 - **Vitest**: 빠른 유닛 테스트
 - **GitHub Actions**: CI/CD 자동화
 
@@ -24,7 +29,7 @@ GitHub 릴리즈가 발행될 때 자동으로 변경사항을 분석하고, Oll
 - Node.js 20 이상
 - pnpm 9 이상
 - GitHub 저장소에 대한 쓰기 권한
-- Ollama 서버 (http://10.4.100.42:11434)
+- Ollama 서버 (http://localhost:11434)
 
 ## 🚀 설치 및 설정
 
@@ -55,8 +60,10 @@ cp .env.example .env
 GITHUB_TOKEN=ghp_your_github_token_here
 GITHUB_REPOSITORY=owner/repo
 RELEASE_TAG=v1.0.0
-OLLAMA_BASE_URL=http://10.4.100.42:11434
+OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.1:latest
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+ENABLE_RAG=true
 ```
 
 ### 4. GitHub Actions 설정
@@ -71,13 +78,24 @@ OLLAMA_MODEL=llama3.1:latest
 
 저장소 설정 > Secrets and variables > Actions > Secrets에서 다음 secret을 추가하세요:
 
-- `OLLAMA_BASE_URL`: Ollama 서버 URL (예: `http://10.4.100.42:11434`)
+- `OLLAMA_BASE_URL`: Ollama 서버 URL (예: `http://localhost:11434`)
 
 **GitHub Variables 설정:**
 
 저장소 설정 > Secrets and variables > Actions > Variables에서 다음 변수를 추가하세요 (선택사항):
 
 - `OLLAMA_MODEL`: 사용할 Ollama 모델 (기본값: `llama3.1:latest`)
+- `OLLAMA_EMBEDDING_MODEL`: 임베딩 모델 (기본값: `nomic-embed-text`)
+- `ENABLE_RAG`: RAG 기능 활성화 여부 (기본값: `true`)
+
+**캐시 설정:**
+
+GitHub Actions는 자동으로 `.cache/embeddings/` 디렉토리를 캐싱하여 임베딩 생성 시간을 단축합니다:
+
+- 첫 번째 실행: 모든 파일을 임베딩하고 캐시에 저장 (느림)
+- 두 번째 실행부터: 캐시된 임베딩을 재사용하여 빠르게 처리
+- 캐시 키는 임베딩 모델명을 포함하여, 모델 변경 시 자동으로 새 캐시 생성
+- GitHub Actions 캐시는 최대 10GB, 7일간 유지됨
 
 ## 📖 사용 방법
 
@@ -161,7 +179,7 @@ cp .vars.example .vars
 
 ```
 GITHUB_TOKEN=ghp_your_actual_token
-OLLAMA_BASE_URL=http://10.4.100.42:11434
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 `.vars` 파일 편집:
@@ -192,7 +210,7 @@ act release -j generate-changelog --secret-file .secrets --var-file .vars
 - act는 Docker를 사용하므로 Docker가 설치되어 있어야 합니다.
 - Apple M-series 칩을 사용하는 경우 `.actrc`에 `--container-architecture linux/amd64` 설정이 포함되어 있습니다.
 - `.secrets` 파일에 유효한 `GITHUB_TOKEN`을 설정해야 GitHub Actions (actions/setup-node 등)을 사용할 수 있습니다.
-- Ollama 서버(`http://10.4.100.42:11434`)에 접근 가능한 네트워크 환경이어야 합니다.
+- Ollama 서버(`http://localhost:11434`)에 접근 가능한 네트워크 환경이어야 합니다.
 
 **테스트 결과 확인:**
 
@@ -250,7 +268,9 @@ github-auto-changelog/
 - `GITHUB_REPOSITORY`: 현재 저장소 (자동 설정)
 - `RELEASE_TAG`: 릴리즈 태그 (자동 설정)
 - `OLLAMA_BASE_URL`: Ollama 서버 URL (GitHub Secret에서 설정 필수)
-- `OLLAMA_MODEL`: 사용할 모델 (GitHub Variable로 설정, 기본값: `llama3.1:latest`)
+- `OLLAMA_MODEL`: 사용할 LLM 모델 (GitHub Variable로 설정, 기본값: `llama3.1:latest`)
+- `OLLAMA_EMBEDDING_MODEL`: 임베딩 모델 (RAG용, 기본값: `nomic-embed-text`)
+- `ENABLE_RAG`: RAG 기능 활성화 여부 (기본값: `true`)
 
 ### Ollama 모델 변경
 
@@ -266,6 +286,58 @@ github-auto-changelog/
 - 🐛 **버그 수정**: 수정된 버그
 - ⚠️ **Breaking Changes**: 기존 사용자에게 영향을 줄 수 있는 변경사항
 - 📝 **기타 변경사항**: 문서 업데이트, 리팩토링, 테스트 등
+
+> ⚠️ **주의**: 생성된 CHANGELOG는 **기존 릴리즈 노트를 덮어씁니다**. 기존 내용을 보존하지 않습니다.
+
+## 🔍 RAG (Retrieval-Augmented Generation) 기능
+
+RAG 기능은 단순히 커밋 메시지만 보는 것이 아니라, **전체 코드베이스를 분석**하여 변경된 코드가 **다른 파일에 미치는 영향을 자동으로 찾아** CHANGELOG에 포함합니다.
+
+### 핵심 가치: 영향 분석
+
+```
+예시: BaseRepository.findMany 함수 수정
+
+↓ (RAG 영향 분석)
+
+영향받는 파일 자동 발견:
+→ UserService.ts (findMany 사용)
+→ ProjectService.ts (findMany 사용)
+→ Repository.test.ts (findMany 테스트)
+
+CHANGELOG에 자동 추가:
+"🔄 영향 범위: UserService, ProjectService 등에서 사용하는
+findMany API가 변경되어 해당 코드도 검토가 필요할 수 있습니다."
+```
+
+### 작동 방식
+
+1. **전체 코드베이스 색인**: 저장소의 모든 코드 파일(최대 100개)을 수집하여 벡터 스토어에 색인
+2. **해시 기반 캐싱**: 파일 내용의 SHA-256 해시로 **임베딩 벡터를 캐싱**하여 두 번째 실행부터 속도 대폭 향상
+3. **배치 임베딩**: 20개씩 배치로 나눠서 안정적으로 임베딩 생성 (배치 사이 1초 대기)
+4. **식별자 추출**: 변경된 파일에서 함수명, 클래스명, 타입명 등을 정규식으로 추출
+5. **영향 분석**: 추출된 식별자를 전체 코드베이스에서 검색하여 영향받는 파일 찾기
+6. **CHANGELOG 생성**: 영향 분석 결과를 "🔄 영향 범위" 섹션으로 추가
+
+> 💡 **전체 코드베이스 색인**: 변경된 함수/클래스가 어떤 파일에서 사용되는지 찾기 위해 전체 코드베이스를 색인합니다.
+>
+> 💡 **임베딩 캐싱**: 파일이 변경되지 않으면 캐시된 **임베딩 벡터**를 재사용하여 Ollama 호출 없이 즉시 사용합니다. 두 번째 실행부터 **10-60배 빠름**!
+>
+> 💡 **배치 임베딩**: 대용량 코드베이스의 경우 한 번에 모든 청크를 임베딩하면 타임아웃이 발생할 수 있습니다. 20개씩 배치로 나눠서 처리하고 배치 사이에 1초 대기하여 서버 부담을 줄입니다.
+
+### 활성화/비활성화
+
+```bash
+# 활성화 (기본값)
+ENABLE_RAG=true pnpm run start
+
+# 비활성화
+ENABLE_RAG=false pnpm run start
+```
+
+### 상세 가이드
+
+RAG 기능의 상세한 설정 및 사용법은 [docs/RAG_FEATURE.md](docs/RAG_FEATURE.md)를 참조하세요.
 
 ## 🤝 기여
 
@@ -284,7 +356,7 @@ github-auto-changelog/
 Ollama 서버가 실행 중인지 확인하세요:
 
 ```bash
-curl http://10.4.100.42:11434/api/version
+curl http://localhost:11434/api/version
 ```
 
 또한 GitHub Secrets에 `OLLAMA_BASE_URL`이 올바르게 설정되어 있는지 확인하세요.

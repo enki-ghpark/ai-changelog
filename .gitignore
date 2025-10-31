@@ -44,4 +44,7 @@ coverage/
 *.tmp
 *.temp
 
+# Cache
+.cache/
+
 test-event.json
