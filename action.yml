@@ -1,0 +1,44 @@
+name: 'Auto CHANGELOG Generator with RAG'
+description: 'AI 기반 CHANGELOG 자동 생성 (Ollama + RAG + LangChain)'
+author: 'rmagur1203'
+
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  github-token:
+    description: 'GitHub Token (GITHUB_TOKEN 사용 권장)'
+    required: true
+  
+  ollama-base-url:
+    description: 'Ollama 서버 URL (여러 개는 쉼표로 구분, 예: http://server1:11434,http://server2:11434)'
+    required: true
+  
+  ollama-model:
+    description: 'CHANGELOG 생성에 사용할 Ollama 모델'
+    required: false
+    default: 'llama3.1:latest'
+  
+  ollama-embedding-model:
+    description: 'RAG 임베딩에 사용할 Ollama 모델'
+    required: false
+    default: 'nomic-embed-text'
+  
+  enable-rag:
+    description: 'RAG 기능 활성화 여부 (true/false)'
+    required: false
+    default: 'true'
+  
+  release-tag:
+    description: '릴리즈 태그 (기본: 이벤트의 태그)'
+    required: false
+
+outputs:
+  changelog:
+    description: '생성된 CHANGELOG 텍스트'
+
+runs:
+  using: 'node20'
+  main: 'action-dist/index.js'
+

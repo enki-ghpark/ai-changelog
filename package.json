@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "tsx src/index.ts",
+    "start": "tsx src/main.ts",
+    "bundle": "ncc build dist/action.js -o action-dist --minify",
+    "package": "pnpm run build && pnpm run bundle",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -24,6 +26,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
     "@langchain/community": "^0.3.57",
     "@langchain/core": "^0.3.79",
     "@langchain/ollama": "^0.1.6",
@@ -34,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.13",
+    "@vercel/ncc": "^0.38.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"

@@ -1,0 +1,42 @@
+name: 자동 CHANGELOG 생성 (예제)
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  generate-changelog:
+    runs-on: [self-hosted, common]
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: RAG 임베딩 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .cache/embeddings
+          key: embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.event.release.tag_name }}-${{ hashFiles('**/*.ts', '**/*.js', '**/*.json') }}
+          restore-keys: |
+            embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.event.release.tag_name }}-
+            embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-
+            embeddings-cache-
+
+      - name: CHANGELOG 생성
+        uses: ./ # 로컬 action 사용 (다른 레포: owner/repo@v1)
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          ollama-base-url: ${{ secrets.OLLAMA_BASE_URL }}
+          ollama-model: ${{ vars.OLLAMA_MODEL || 'llama3.1:latest' }}
+          ollama-embedding-model: ${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}
+          enable-rag: ${{ vars.ENABLE_RAG || 'true' }}
+
+      - name: 완료 알림
+        if: success()
+        run: echo "✅ CHANGELOG가 성공적으로 생성되어 릴리즈에 추가되었습니다."
+
+      - name: 실패 알림
+        if: failure()
+        run: echo "❌ CHANGELOG 생성 중 오류가 발생했습니다."

@@ -408,7 +408,7 @@ export class GitHubService {
     ];
 
     const MAX_FILE_SIZE = 1024 * 1024; // 1MB
-    const MAX_FILES = 100; // 최대 100개 파일만 색인
+    const MAX_FILES = 300; // 최대 100개 파일만 색인
 
     try {
       // Git Tree API로 전체 파일 트리 가져오기 (recursive=true)

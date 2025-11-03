@@ -457,34 +457,57 @@ ${candidatesList}
             });
           }
         } else {
-          // Tool call이 없으면 최종 응답 또는 계속 진행
-          if (responseContent && responseContent.trim().length > 0) {
-            // 실제 내용이 있으면 최종 분석으로 간주
-            console.log(`\n✅ Tool 호출이 없음 - 최종 분석 완료!`);
-            finalAnalysis = responseContent;
+          // Tool call이 없으면 최종 분석 요청
+          console.log(`\n✅ Tool 호출이 없음 - 최종 분석 정리 요청`);
 
-            if (iteration === 0) {
-              console.warn(
-                "\n⚠️  주의: LLM이 첫 번째 반복에서 Tool을 사용하지 않았습니다."
-              );
-              console.warn(
-                "   모델이 tool calling을 제대로 지원하는지 확인하세요."
-              );
-            }
+          if (iteration === 0) {
+            console.warn(
+              "\n⚠️  주의: LLM이 첫 번째 반복에서 Tool을 사용하지 않았습니다."
+            );
+            console.warn(
+              "   모델이 tool calling을 제대로 지원하는지 확인하세요."
+            );
+          }
+
+          // 응답을 대화에 추가
+          conversation.push(response);
+
+          // 최종 분석 정리 요청
+          console.log(`\n📝 LLM에게 최종 분석 정리 요청...`);
+          conversation.push({
+            role: "user",
+            content: `지금까지 수집한 정보를 바탕으로 **최종 영향 분석 결과**를 정리해서 제공해주세요.
+
+다음 형식으로 작성해주세요:
+
+## 영향받는 파일 및 이유
+- [파일명]: [영향 받는 이유와 세부 내용]
+
+## 잠재적 Breaking Changes
+- [있다면 구체적으로 명시]
+
+## 주의사항
+- [사용자가 주의해야 할 점]
+
+분석하지 않았거나 확실하지 않은 내용은 포함하지 마세요.
+Tool을 사용하지 말고, 지금까지 수집한 정보를 바탕으로 텍스트로만 응답해주세요.`,
+          });
+
+          // 최종 정리 응답 받기
+          const summaryResponse = await llmWithTools.invoke(conversation);
+          const summaryContent =
+            typeof summaryResponse === "string"
+              ? summaryResponse
+              : summaryResponse.content || "";
+
+          if (summaryContent && summaryContent.trim().length > 0) {
+            console.log("\n✅ 최종 분석 정리 완료!");
+            finalAnalysis = summaryContent;
             break;
           } else {
-            // 내용이 없으면 계속 진행 (빈 응답 무시)
-            console.log(
-              `\n⚠️  Tool 호출도 없고 내용도 비어있음 - 계속 진행...`
-            );
-            // 빈 응답을 대화에 추가 (컨텍스트 유지)
-            conversation.push(response);
-            // 다시 요청하도록 프롬프트 추가
-            conversation.push({
-              role: "user",
-              content:
-                "분석을 계속해주세요. 필요한 파일을 read_file로 읽거나, 코드를 search_code로 검색하여 영향 분석을 완료해주세요.",
-            });
+            console.log(`\n⚠️  최종 정리가 비어있음 - 이전 응답 사용`);
+            finalAnalysis = responseContent || "영향 분석을 완료했습니다.";
+            break;
           }
         }
       }

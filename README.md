@@ -97,7 +97,91 @@ GitHub Actions는 자동으로 `.cache/embeddings/` 디렉토리를 캐싱하여
 - 캐시 키는 임베딩 모델명을 포함하여, 모델 변경 시 자동으로 새 캐시 생성
 - GitHub Actions 캐시는 최대 10GB, 7일간 유지됨
 
-## 📖 사용 방법
+## 🎯 다른 레포지토리에서 사용하기
+
+이 프로젝트는 GitHub Action으로 패키징되어 있어, 다른 레포지토리에서 간단히 가져다 사용할 수 있습니다.
+
+### GitHub Action으로 사용
+
+워크플로우 파일에 다음과 같이 추가하세요:
+
+```yaml
+name: 자동 CHANGELOG 생성
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  generate-changelog:
+    runs-on: [self-hosted, common] # Ollama 서버에 접근 가능한 runner
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 전체 히스토리 필요
+
+      - name: RAG 임베딩 캐시 (선택사항)
+        uses: actions/cache@v4
+        with:
+          path: .cache/embeddings
+          key: embeddings-${{ github.run_id }}
+          restore-keys: embeddings-
+
+      - uses: YOUR_USERNAME/github-auto-changelog@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          ollama-base-url: ${{ secrets.OLLAMA_BASE_URL }}
+          ollama-model: "llama3.1:latest"
+          ollama-embedding-model: "nomic-embed-text"
+          enable-rag: "true"
+```
+
+### Inputs
+
+| Name                     | Description                             | Required | Default            |
+| ------------------------ | --------------------------------------- | -------- | ------------------ |
+| `github-token`           | GitHub Token                            | ✅       | -                  |
+| `ollama-base-url`        | Ollama 서버 URL (여러 개는 쉼표로 구분) | ✅       | -                  |
+| `ollama-model`           | LLM 모델                                | ❌       | `llama3.1:latest`  |
+| `ollama-embedding-model` | 임베딩 모델                             | ❌       | `nomic-embed-text` |
+| `enable-rag`             | RAG 활성화                              | ❌       | `true`             |
+| `release-tag`            | 릴리즈 태그                             | ❌       | 자동 감지          |
+
+### Outputs
+
+| Name        | Description             |
+| ----------- | ----------------------- |
+| `changelog` | 생성된 CHANGELOG 텍스트 |
+
+### 여러 Ollama 서버 사용 (로드 밸런싱/폴백)
+
+`ollama-base-url`에 쉼표로 구분된 여러 서버를 지정할 수 있습니다:
+
+```yaml
+- uses: YOUR_USERNAME/github-auto-changelog@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    ollama-base-url: "http://server1:11434,http://server2:11434,http://server3:11434"
+```
+
+Action은 자동으로 사용 가능한 서버를 찾아 사용합니다.
+
+### 필수 설정
+
+1. **GitHub Secrets 설정:**
+
+   - `OLLAMA_BASE_URL`: Ollama 서버 주소 (또는 여러 주소를 쉼표로 구분)
+
+2. **Self-hosted Runner:**
+
+   - Ollama 서버에 접근 가능한 네트워크 환경
+   - Node.js 20+ 설치
+
+3. **Ollama 서버 설정:**
+   - 필요한 모델 pull: `ollama pull llama3.1:latest`, `ollama pull nomic-embed-text`
+
+## 📖 사용 방법 (로컬 개발)
 
 ### 자동 실행 (권장)
 
