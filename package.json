@@ -10,6 +10,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:tool": "tsx test/tool-calling-test.ts",
     "test:act": "act release -e test-event.json --secret-file .secrets --var-file .vars",
     "update-test-event": "bash scripts/update-test-event.sh"
   },
@@ -27,7 +28,9 @@
     "@langchain/core": "^0.3.0",
     "@langchain/ollama": "^0.1.0",
     "@octokit/rest": "^21.0.0",
-    "langchain": "^0.3.0"
+    "dotenv": "^17.2.3",
+    "langchain": "^0.3.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

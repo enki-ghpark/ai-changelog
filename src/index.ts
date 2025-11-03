@@ -1,7 +1,7 @@
 import { GitHubService } from "./utils/github.js";
 import { ChangelogGenerator } from "./utils/changelog.js";
 import { RAGService } from "./utils/rag.js";
-import { CodeAnalysisToolExecutor } from "./utils/tools.js";
+import { CodeAnalysisTools } from "./utils/tools.js";
 import type {
   GitHubConfig,
   OllamaConfig,
@@ -160,10 +160,11 @@ async function main() {
         if (candidates.length > 0) {
           console.log(`✅ ${candidates.length}개의 후보 파일 발견`);
 
-          // 2. Tool executor 초기화
-          const toolExecutor = new CodeAnalysisToolExecutor(
+          // 2. Code Analysis Tools 초기화 (RAG 서비스 포함)
+          const codeAnalysisTools = new CodeAnalysisTools(
             githubService,
-            releaseTag
+            releaseTag,
+            ragService
           );
 
           // 3. Tool calling 기반 CHANGELOG 생성
@@ -171,11 +172,11 @@ async function main() {
           changelog = await changelogGenerator.generateWithTools(
             enhancedData,
             candidates,
-            toolExecutor
+            codeAnalysisTools
           );
 
           // 캐시 정리
-          toolExecutor.clearCache();
+          codeAnalysisTools.clearCache();
         } else {
           // 후보가 없으면 기존 RAG 방식 사용
           console.log("⚠️  영향 파일 후보가 없어 기본 RAG 방식 사용");

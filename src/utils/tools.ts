@@ -1,166 +1,271 @@
 import { GitHubService } from "./github.js";
-import type { Tool, ToolExecutor } from "../types.js";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { z } from "zod";
+import type { RAGService } from "./rag.js";
 
 /**
- * LLM이 사용할 수 있는 Tool 시스템
- * GitHub API를 통해 파일 읽기, 검색 등의 기능 제공
+ * LangChain Tool을 사용한 코드 분석 도구 모음
  */
-export class CodeAnalysisToolExecutor implements ToolExecutor {
+export class CodeAnalysisTools {
   private githubService: GitHubService;
   private ref: string; // Git ref (tag, branch, commit SHA)
   private fileCache: Map<string, string> = new Map();
   private treeCache: any[] | null = null;
+  private ragService: RAGService | null = null;
 
-  constructor(githubService: GitHubService, ref: string) {
+  constructor(
+    githubService: GitHubService,
+    ref: string,
+    ragService?: RAGService
+  ) {
     this.githubService = githubService;
     this.ref = ref;
+    this.ragService = ragService || null;
   }
 
   /**
-   * Tool 목록을 반환합니다
+   * 모든 Tool을 배열로 반환합니다
    */
-  getTools(): Tool[] {
-    return [
-      {
-        type: "function",
-        function: {
-          name: "read_file",
-          description:
-            "레포지토리의 특정 파일 내용을 읽습니다. 전체 파일 또는 특정 라인 범위를 읽을 수 있습니다.",
-          parameters: {
-            type: "object",
-            properties: {
-              path: {
-                type: "string",
-                description: "읽을 파일의 경로 (예: src/index.ts)",
-              },
-              start_line: {
-                type: "number",
-                description: "시작 라인 번호 (선택사항, 1부터 시작)",
-              },
-              end_line: {
-                type: "number",
-                description: "끝 라인 번호 (선택사항, 포함)",
-              },
-            },
-            required: ["path"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "list_files",
-          description:
-            "특정 디렉토리의 파일 및 하위 디렉토리 목록을 조회합니다.",
-          parameters: {
-            type: "object",
-            properties: {
-              directory: {
-                type: "string",
-                description:
-                  "조회할 디렉토리 경로 (예: src/utils). 빈 문자열이면 루트 디렉토리",
-              },
-            },
-            required: ["directory"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "search_code",
-          description:
-            "코드베이스에서 특정 패턴을 검색합니다. 함수명, 클래스명, 변수명 등을 찾을 때 유용합니다.",
-          parameters: {
-            type: "object",
-            properties: {
-              pattern: {
-                type: "string",
-                description: "검색할 패턴 (정규식 지원)",
-              },
-              file_pattern: {
-                type: "string",
-                description:
-                  "파일 확장자 필터 (선택사항, 예: .ts, .js). 빈 값이면 모든 파일 검색",
-              },
-              max_results: {
-                type: "number",
-                description: "최대 결과 수 (기본값: 10)",
-              },
-            },
-            required: ["pattern"],
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "get_file_info",
-          description: "파일의 메타정보를 조회합니다 (크기, 타입 등).",
-          parameters: {
-            type: "object",
-            properties: {
-              path: {
-                type: "string",
-                description: "조회할 파일의 경로",
-              },
-            },
-            required: ["path"],
-          },
-        },
-      },
+  getTools() {
+    const tools: DynamicStructuredTool[] = [
+      this.createReadFileTool(),
+      this.createListFilesTool(),
+      this.createSearchCodeTool(),
+      this.createGetFileInfoTool(),
     ];
+
+    // RAG 서비스가 있으면 RAG 검색 tool도 추가
+    if (this.ragService) {
+      tools.push(this.createSearchRAGTool());
+    }
+
+    return tools;
   }
 
   /**
-   * Tool을 실행합니다
+   * read_file: 파일 내용을 읽는 tool
    */
-  async execute(
-    toolName: string,
-    args: Record<string, any>
-  ): Promise<string> {
-    const startTime = Date.now();
-    console.log(`      → ${toolName} 시작...`);
+  private createReadFileTool() {
+    return new DynamicStructuredTool({
+      name: "read_file",
+      description:
+        "레포지토리의 특정 파일 내용을 읽습니다. 전체 파일 또는 특정 라인 범위를 읽을 수 있습니다.",
+      schema: z.object({
+        path: z.string().describe("읽을 파일의 경로 (예: src/index.ts)"),
+        start_line: z
+          .number()
+          .optional()
+          .describe("시작 라인 번호 (선택사항, 1부터 시작)"),
+        end_line: z
+          .number()
+          .optional()
+          .describe("끝 라인 번호 (선택사항, 포함)"),
+      }),
+      func: async (input) => {
+        const { path, start_line, end_line } = input as any;
+        const startTime = Date.now();
+        console.log(`      → read_file 시작: ${path}`);
 
-    try {
-      let result: string;
-      switch (toolName) {
-        case "read_file":
-          result = await this.readFile(
-            args.path,
-            args.start_line,
-            args.end_line
-          );
-          break;
-        case "list_files":
-          result = await this.listFiles(args.directory || "");
-          break;
-        case "search_code":
-          result = await this.searchCode(
-            args.pattern,
-            args.file_pattern,
-            args.max_results || 10
-          );
-          break;
-        case "get_file_info":
-          result = await this.getFileInfo(args.path);
-          break;
-        default:
-          throw new Error(`알 수 없는 Tool: ${toolName}`);
-      }
-
-      const elapsed = Date.now() - startTime;
-      console.log(`      ✓ ${toolName} 완료 (${elapsed}ms)`);
-      return result;
-    } catch (error) {
-      const elapsed = Date.now() - startTime;
-      const errorMsg =
-        error instanceof Error ? error.message : String(error);
-      console.log(`      ✗ ${toolName} 실패 (${elapsed}ms): ${errorMsg}`);
-      return `오류: ${errorMsg}`;
-    }
+        try {
+          const result = await this.readFile(path, start_line, end_line);
+          const elapsed = Date.now() - startTime;
+          console.log(`      ✓ read_file 완료 (${elapsed}ms)`);
+          return result;
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(`      ✗ read_file 실패 (${elapsed}ms): ${errorMsg}`);
+          return `오류: ${errorMsg}`;
+        }
+      },
+    });
   }
+
+  /**
+   * list_files: 디렉토리 목록을 조회하는 tool
+   */
+  private createListFilesTool() {
+    return new DynamicStructuredTool({
+      name: "list_files",
+      description: "특정 디렉토리의 파일 및 하위 디렉토리 목록을 조회합니다.",
+      schema: z.object({
+        directory: z
+          .string()
+          .describe(
+            "조회할 디렉토리 경로 (예: src/utils). 빈 문자열이면 루트 디렉토리"
+          ),
+      }),
+      func: async (input) => {
+        const { directory } = input as any;
+        const startTime = Date.now();
+        console.log(`      → list_files 시작: ${directory || "(루트)"}`);
+
+        try {
+          const result = await this.listFiles(directory || "");
+          const elapsed = Date.now() - startTime;
+          console.log(`      ✓ list_files 완료 (${elapsed}ms)`);
+          return result;
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(`      ✗ list_files 실패 (${elapsed}ms): ${errorMsg}`);
+          return `오류: ${errorMsg}`;
+        }
+      },
+    });
+  }
+
+  /**
+   * search_code: 코드 검색 tool
+   */
+  private createSearchCodeTool() {
+    return new DynamicStructuredTool({
+      name: "search_code",
+      description:
+        "코드베이스에서 특정 패턴을 검색합니다. 함수명, 클래스명, 변수명 등을 찾을 때 유용합니다.",
+      schema: z.object({
+        pattern: z.string().describe("검색할 패턴 (정규식 지원)"),
+        file_pattern: z
+          .string()
+          .optional()
+          .describe(
+            "파일 확장자 필터 (선택사항, 예: .ts, .js). 빈 값이면 모든 파일 검색"
+          ),
+        max_results: z
+          .number()
+          .optional()
+          .describe("최대 결과 수 (기본값: 10)"),
+      }),
+      func: async (input) => {
+        const { pattern, file_pattern, max_results } = input as any;
+        const startTime = Date.now();
+        console.log(`      → search_code 시작: "${pattern}"`);
+
+        try {
+          const result = await this.searchCode(
+            pattern,
+            file_pattern,
+            max_results || 10
+          );
+          const elapsed = Date.now() - startTime;
+          console.log(`      ✓ search_code 완료 (${elapsed}ms)`);
+          return result;
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(`      ✗ search_code 실패 (${elapsed}ms): ${errorMsg}`);
+          return `오류: ${errorMsg}`;
+        }
+      },
+    });
+  }
+
+  /**
+   * get_file_info: 파일 메타정보 조회 tool
+   */
+  private createGetFileInfoTool() {
+    return new DynamicStructuredTool({
+      name: "get_file_info",
+      description: "파일의 메타정보를 조회합니다 (크기, 타입 등).",
+      schema: z.object({
+        path: z.string().describe("조회할 파일의 경로"),
+      }),
+      func: async (input) => {
+        const { path } = input as any;
+        const startTime = Date.now();
+        console.log(`      → get_file_info 시작: ${path}`);
+
+        try {
+          const result = await this.getFileInfo(path);
+          const elapsed = Date.now() - startTime;
+          console.log(`      ✓ get_file_info 완료 (${elapsed}ms)`);
+          return result;
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(`      ✗ get_file_info 실패 (${elapsed}ms): ${errorMsg}`);
+          return `오류: ${errorMsg}`;
+        }
+      },
+    });
+  }
+
+  /**
+   * search_similar_code: RAG 벡터 검색으로 유사한 코드 찾기 tool
+   */
+  private createSearchRAGTool() {
+    return new DynamicStructuredTool({
+      name: "search_similar_code",
+      description:
+        "RAG(벡터 검색)를 사용하여 쿼리와 의미적으로 유사한 코드를 찾습니다. 특정 개념이나 기능과 관련된 코드를 찾을 때 유용합니다. 예: '인증 관련 코드', 'API 호출 로직', '데이터베이스 쿼리'",
+      schema: z.object({
+        query: z
+          .string()
+          .describe(
+            "검색할 쿼리 (자연어로 설명). 예: '사용자 인증 로직', '파일 업로드 처리'"
+          ),
+        top_k: z
+          .number()
+          .optional()
+          .describe("반환할 최대 결과 수 (기본값: 5)"),
+      }),
+      func: async (input) => {
+        const { query, top_k } = input as any;
+        const startTime = Date.now();
+        console.log(`      → search_similar_code 시작: "${query}"`);
+
+        try {
+          if (!this.ragService) {
+            return "오류: RAG 서비스를 사용할 수 없습니다.";
+          }
+
+          const k = top_k || 5;
+          const retriever = this.ragService.getRetriever(k);
+          const documents = await retriever.invoke(query);
+
+          if (documents.length === 0) {
+            return `"${query}"와 관련된 코드를 찾지 못했습니다.`;
+          }
+
+          // 결과 포맷팅
+          const results = documents.map((doc, idx) => {
+            const metadata = doc.metadata || {};
+            const filename = metadata.filename || "알 수 없음";
+            const content = doc.pageContent || "";
+            const preview =
+              content.length > 300
+                ? content.substring(0, 300) + "\n... (생략)"
+                : content;
+
+            return `[${idx + 1}] ${filename}\n${preview}`;
+          });
+
+          const elapsed = Date.now() - startTime;
+          console.log(
+            `      ✓ search_similar_code 완료 (${elapsed}ms, ${documents.length}개 발견)`
+          );
+
+          return `RAG 검색 결과: "${query}" (${
+            documents.length
+          }개 발견)\n\n${results.join("\n\n---\n\n")}`;
+        } catch (error) {
+          const elapsed = Date.now() - startTime;
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          console.log(
+            `      ✗ search_similar_code 실패 (${elapsed}ms): ${errorMsg}`
+          );
+          return `오류: ${errorMsg}`;
+        }
+      },
+    });
+  }
+
+  // ===== Private Helper Methods =====
 
   /**
    * 파일 내용을 읽습니다
@@ -175,7 +280,10 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
 
     if (!content) {
       // 캐시에 없으면 GitHub에서 가져오기
-      const fetchedContent = await this.githubService.getFileContent(path, this.ref);
+      const fetchedContent = await this.githubService.getFileContent(
+        path,
+        this.ref
+      );
       if (!fetchedContent) {
         return `파일을 찾을 수 없습니다: ${path}`;
       }
@@ -249,16 +357,12 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
 
     for (const item of items) {
       const path = item.path || "";
-      const name = normalizedDir
-        ? path.substring(prefix.length)
-        : path;
+      const name = normalizedDir ? path.substring(prefix.length) : path;
 
       if (item.type === "tree") {
         dirs.push(`📁 ${name}/`);
       } else {
-        const size = item.size
-          ? ` (${this.formatSize(item.size)})`
-          : "";
+        const size = item.size ? ` (${this.formatSize(item.size)})` : "";
         files.push(`📄 ${name}${size}`);
       }
     }
@@ -289,9 +393,7 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
     let files = this.treeCache.filter((item) => item.type === "blob");
 
     if (filePattern) {
-      files = files.filter((item) =>
-        (item.path || "").endsWith(filePattern)
-      );
+      files = files.filter((item) => (item.path || "").endsWith(filePattern));
     }
 
     // 검색 정규식
@@ -362,9 +464,7 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
       `검색 결과: "${pattern}" (${results.length}개 발견${
         results.length >= maxResults ? ", 상위 " + maxResults + "개만 표시" : ""
       })\n`,
-      ...results.map(
-        (r) => `${r.file}:${r.line}: ${r.content}`
-      ),
+      ...results.map((r) => `${r.file}:${r.line}: ${r.content}`),
     ].join("\n");
 
     return output;
@@ -406,14 +506,12 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
    */
   private async fetchTree(): Promise<any[]> {
     try {
-      const tree = await (this.githubService as any).octokit.rest.git.getTree(
-        {
-          owner: (this.githubService as any).owner,
-          repo: (this.githubService as any).repo,
-          tree_sha: this.ref,
-          recursive: "true",
-        }
-      );
+      const tree = await (this.githubService as any).octokit.rest.git.getTree({
+        owner: (this.githubService as any).owner,
+        repo: (this.githubService as any).repo,
+        tree_sha: this.ref,
+        recursive: "true",
+      });
       return tree.data.tree || [];
     } catch (error) {
       console.error("Tree 가져오기 실패:", error);
@@ -438,4 +536,3 @@ export class CodeAnalysisToolExecutor implements ToolExecutor {
     this.treeCache = null;
   }
 }
-

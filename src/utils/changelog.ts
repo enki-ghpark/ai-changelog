@@ -1,4 +1,4 @@
-import { Ollama } from "@langchain/ollama";
+import { ChatOllama } from "@langchain/ollama";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { RunnableSequence, RunnableLambda } from "@langchain/core/runnables";
 import { StringOutputParser } from "@langchain/core/output_parsers";
@@ -9,20 +9,20 @@ import type {
   OllamaConfig,
   FileChange,
   AffectedFileCandidate,
-  ToolExecutor,
 } from "../types.js";
-import { OllamaLoadBalancer } from "./ollama-balancer.js";
+import { ChatOllamaLoadBalancer } from "./chat-ollama-balancer.js";
+import type { CodeAnalysisTools } from "./tools.js";
 
 export class ChangelogGenerator {
-  private llm: Ollama | OllamaLoadBalancer;
+  private llm: ChatOllama | ChatOllamaLoadBalancer;
   private enhancedPrompt: PromptTemplate;
 
   constructor(config: OllamaConfig) {
     // 여러 서버가 설정되어 있으면 로드 밸런서 사용
     if (config.serverUrls && config.serverUrls.length > 1) {
-      this.llm = new OllamaLoadBalancer(config.serverUrls, config.model);
+      this.llm = new ChatOllamaLoadBalancer(config.serverUrls, config.model);
     } else {
-      this.llm = new Ollama({
+      this.llm = new ChatOllama({
         baseUrl: config.baseUrl,
         model: config.model,
       });
@@ -261,12 +261,217 @@ export class ChangelogGenerator {
   }
 
   /**
-   * Tool calling을 통한 상세 영향 분석
+   * LangChain bindTools를 사용한 영향 분석
+   */
+  private async analyzeImpactWithLangChainTools(
+    candidates: AffectedFileCandidate[],
+    fileChanges: FileChange[],
+    llmWithTools: any,
+    tools: any[]
+  ): Promise<string> {
+    console.log("🔧 LangChain Tool calling을 통한 상세 영향 분석 시작...");
+
+    // 변경사항 요약
+    const changesSummary = fileChanges
+      .slice(0, 10)
+      .map(
+        (f) =>
+          `- ${f.filename} (${f.status}, +${f.additions}/-${f.deletions}줄)`
+      )
+      .join("\n");
+
+    // 후보 파일 목록
+    const candidatesList = candidates
+      .map((c) => `- ${c.filename}: ${c.reason}`)
+      .join("\n");
+
+    const analysisPrompt = `당신은 코드 변경사항의 영향을 분석하는 전문가입니다.
+
+다음 파일들이 변경되었습니다:
+${changesSummary}
+
+RAG 분석 결과, 다음 파일들이 영향받을 가능성이 있습니다:
+${candidatesList}
+
+당신의 임무는 실제 코드를 읽고 분석하여 이 변경사항이 다른 파일들에 어떤 영향을 미치는지 파악하는 것입니다.
+
+분석 절차:
+1. 변경된 주요 파일들을 read_file tool로 읽어서 어떤 변경이 있는지 확인
+2. 영향받을 가능성이 있는 후보 파일들도 read_file로 확인
+3. 필요하다면 search_code로 특정 함수나 클래스 사용처 검색
+4. 분석 결과를 구체적으로 요약
+
+최종적으로 다음을 포함하여 답변하세요:
+- 실제로 영향받는 파일들과 그 이유
+- 잠재적 Breaking Changes가 있다면 명시
+- 사용자가 주의해야 할 점
+
+Tool을 적극적으로 사용하여 실제 코드를 확인하세요.`;
+
+    try {
+      // 초기 프롬프트 출력
+      console.log("\n" + "=".repeat(80));
+      console.log("📨 초기 분석 프롬프트:");
+      console.log("=".repeat(80));
+      console.log(analysisPrompt);
+      console.log("=".repeat(80) + "\n");
+
+      // Tool calling 루프
+      const MAX_ITERATIONS = 40;
+      let conversation: any[] = [];
+      let finalAnalysis = "";
+
+      conversation.push({
+        role: "user",
+        content: analysisPrompt,
+      });
+
+      for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        console.log(`\n${"=".repeat(80)}`);
+        console.log(`🔄 [반복 ${iteration + 1}/${MAX_ITERATIONS}]`);
+        console.log("=".repeat(80));
+
+        console.log("\n💭 LLM에게 요청 중...");
+        const response = await llmWithTools.invoke(conversation);
+
+        // 응답 내용 출력
+        const responseContent =
+          typeof response === "string" ? response : response.content || "";
+
+        if (responseContent) {
+          console.log("\n🤖 LLM 응답 내용:");
+          console.log("-".repeat(80));
+          if (responseContent.length > 500) {
+            console.log(responseContent.substring(0, 500) + "\n... (생략) ...");
+          } else {
+            console.log(responseContent);
+          }
+          console.log("-".repeat(80));
+        }
+
+        // Tool calls 확인
+        if (response.tool_calls && response.tool_calls.length > 0) {
+          console.log(`\n🔧 ${response.tool_calls.length}개의 Tool 호출 감지:`);
+
+          // Tool 결과 수집
+          const toolResults = [];
+
+          for (const toolCall of response.tool_calls) {
+            const argsStr = JSON.stringify(toolCall.args);
+            const argsPreview =
+              argsStr.length > 100
+                ? argsStr.substring(0, 100) + "..."
+                : argsStr;
+            console.log(`\n   📞 Tool: ${toolCall.name}`);
+            console.log(`      인자: ${argsPreview}`);
+
+            // Tool 실행
+            const tool = tools.find((t) => t.name === toolCall.name);
+            if (tool) {
+              try {
+                const result = await tool.invoke(toolCall.args);
+
+                // 결과 미리보기 출력
+                const resultPreview =
+                  result.length > 200
+                    ? result.substring(0, 200) + "\n      ... (생략) ..."
+                    : result;
+                console.log(`      결과: ${resultPreview}`);
+
+                toolResults.push({
+                  role: "tool",
+                  content: result,
+                  tool_call_id: toolCall.id,
+                });
+              } catch (error) {
+                const errorMsg =
+                  error instanceof Error ? error.message : String(error);
+                console.error(`      ✗ 실패: ${errorMsg}`);
+                toolResults.push({
+                  role: "tool",
+                  content: `오류: ${errorMsg}`,
+                  tool_call_id: toolCall.id,
+                });
+              }
+            } else {
+              console.warn(`      ⚠️  Tool을 찾을 수 없음: ${toolCall.name}`);
+            }
+          }
+
+          // 대화에 응답과 tool 결과 추가
+          conversation.push(response);
+          conversation.push(...toolResults);
+
+          console.log(`\n✅ Tool 실행 완료, 다음 반복으로 계속...`);
+        } else {
+          // Tool call이 없으면 최종 응답 또는 계속 진행
+          if (responseContent && responseContent.trim().length > 0) {
+            // 실제 내용이 있으면 최종 분석으로 간주
+            console.log(`\n✅ Tool 호출이 없음 - 최종 분석 완료!`);
+            finalAnalysis = responseContent;
+
+            if (iteration === 0) {
+              console.warn(
+                "\n⚠️  주의: LLM이 첫 번째 반복에서 Tool을 사용하지 않았습니다."
+              );
+              console.warn(
+                "   모델이 tool calling을 제대로 지원하는지 확인하세요."
+              );
+            }
+            break;
+          } else {
+            // 내용이 없으면 계속 진행 (빈 응답 무시)
+            console.log(
+              `\n⚠️  Tool 호출도 없고 내용도 비어있음 - 계속 진행...`
+            );
+            // 빈 응답을 대화에 추가 (컨텍스트 유지)
+            conversation.push(response);
+            // 다시 요청하도록 프롬프트 추가
+            conversation.push({
+              role: "user",
+              content:
+                "분석을 계속해주세요. 필요한 파일을 read_file로 읽거나, 코드를 search_code로 검색하여 영향 분석을 완료해주세요.",
+            });
+          }
+        }
+      }
+
+      if (!finalAnalysis && conversation.length > 1) {
+        console.log(
+          "\n⚠️  최종 분석을 생성하지 못했습니다. 마지막 응답을 사용합니다."
+        );
+        const lastResponse = conversation[conversation.length - 1];
+        finalAnalysis =
+          typeof lastResponse === "string"
+            ? lastResponse
+            : lastResponse.content || "영향 분석을 완료했습니다.";
+      }
+
+      if (!finalAnalysis) {
+        finalAnalysis =
+          "영향 분석을 완료했지만 최종 요약을 생성하지 못했습니다.";
+      }
+
+      console.log("\n" + "=".repeat(80));
+      console.log("✅ 최종 영향 분석 결과:");
+      console.log("=".repeat(80));
+      console.log(finalAnalysis);
+      console.log("=".repeat(80) + "\n");
+
+      return finalAnalysis;
+    } catch (error) {
+      console.error("❌ 영향 분석 실패:", error);
+      return `영향 분석 중 오류가 발생했습니다: ${error}`;
+    }
+  }
+
+  /**
+   * Tool calling을 통한 상세 영향 분석 (DEPRECATED - 수동 구현)
    */
   private async analyzeImpactWithTools(
     candidates: AffectedFileCandidate[],
     fileChanges: FileChange[],
-    toolExecutor: ToolExecutor
+    toolExecutor: any
   ): Promise<string> {
     console.log("🔧 Tool calling을 통한 상세 영향 분석 시작...");
 
@@ -360,7 +565,7 @@ Tool 호출 형식 (필수):
         // Ollama에 요청 (tool calling 지원)
         console.log("\n💭 LLM에게 요청 중...");
         console.log(
-          `   제공된 Tool: ${tools.map((t) => t.function.name).join(", ")}`
+          `   제공된 Tool: ${tools.map((t: any) => t.function.name).join(", ")}`
         );
 
         const response = await this.llm.invoke(
@@ -612,23 +817,30 @@ Tool 호출 형식 (필수):
   async generateWithTools(
     data: EnhancedChangelogData,
     candidates: AffectedFileCandidate[],
-    toolExecutor: ToolExecutor
+    codeAnalysisTools: CodeAnalysisTools
   ): Promise<string> {
     console.log("🤖 Tool calling 기반 CHANGELOG 생성 시작...");
 
-    // 1. Tool calling으로 상세 영향 분석 수행
+    // 1. Tool binding
+    const tools = codeAnalysisTools.getTools();
+    const llmWithTools = this.llm.bindTools(tools);
+
+    console.log(`🔧 ${tools.length}개의 Tool 바인딩 완료`);
+
+    // 2. Tool calling으로 상세 영향 분석 수행
     let impactAnalysis = "";
     if (candidates.length > 0) {
-      impactAnalysis = await this.analyzeImpactWithTools(
+      impactAnalysis = await this.analyzeImpactWithLangChainTools(
         candidates,
         data.fileChanges,
-        toolExecutor
+        llmWithTools,
+        tools
       );
     } else {
       impactAnalysis = "영향받는 파일 후보가 없습니다.";
     }
 
-    // 2. CHANGELOG 생성 프롬프트 준비
+    // 3. CHANGELOG 생성 프롬프트 준비
     const releaseInfo = this.formatChangelogData(data);
     const fileChanges = this.formatFileChanges(data.fileChanges);
 
@@ -676,11 +888,18 @@ ${impactAnalysis}
 ---
 *이 CHANGELOG는 AI에 의해 자동 생성되었습니다 (RAG + Tool Calling).*`;
 
-    // 3. LLM으로 CHANGELOG 생성
+    // 4. LLM으로 CHANGELOG 생성
     try {
-      const changelog = await this.llm.invoke(changelogPrompt);
+      const response = await this.llm.invoke(changelogPrompt);
       console.log("✅ CHANGELOG 생성 완료");
-      return typeof changelog === "string" ? changelog : String(changelog);
+
+      // AIMessage에서 content 추출
+      const changelog =
+        typeof response === "string"
+          ? response
+          : (response as any).content || String(response);
+
+      return changelog;
     } catch (error) {
       console.error("❌ CHANGELOG 생성 실패:", error);
       throw error;
