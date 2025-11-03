@@ -124,19 +124,23 @@ export class CodeAnalysisTools {
     return new DynamicStructuredTool({
       name: "search_code",
       description:
-        "코드베이스에서 특정 패턴을 검색합니다. 함수명, 클래스명, 변수명 등을 찾을 때 유용합니다.",
+        "코드베이스 전체에서 특정 텍스트 패턴을 검색합니다. 함수명, 클래스명, 변수명을 찾을 때 사용하세요. 정규식도 지원합니다.",
       schema: z.object({
-        pattern: z.string().describe("검색할 패턴 (정규식 지원)"),
+        pattern: z
+          .string()
+          .describe(
+            "검색할 텍스트나 정규식 패턴 (필수). 예: 'buildWhereConditions', 'function\\s+\\w+'"
+          ),
         file_pattern: z
           .string()
           .optional()
           .describe(
-            "파일 확장자 필터 (선택사항, 예: .ts, .js). 빈 값이면 모든 파일 검색"
+            "파일 확장자로 필터링 (선택). 예: '.ts', '.js', '.tsx'. 생략하면 모든 파일 검색"
           ),
         max_results: z
           .number()
           .optional()
-          .describe("최대 결과 수 (기본값: 10)"),
+          .describe("반환할 최대 검색 결과 수 (선택, 기본값: 10)"),
       }),
       func: async (input) => {
         const { pattern, file_pattern, max_results } = input as any;

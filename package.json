@@ -24,18 +24,18 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@langchain/community": "^0.3.0",
-    "@langchain/core": "^0.3.0",
-    "@langchain/ollama": "^0.1.0",
-    "@octokit/rest": "^21.0.0",
+    "@langchain/community": "^0.3.57",
+    "@langchain/core": "^0.3.79",
+    "@langchain/ollama": "^0.1.6",
+    "@octokit/rest": "^21.1.1",
     "dotenv": "^17.2.3",
-    "langchain": "^0.3.0",
+    "langchain": "^0.3.36",
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.0.0"
+    "@types/node": "^22.18.13",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
   }
 }

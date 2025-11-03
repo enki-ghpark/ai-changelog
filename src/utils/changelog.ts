@@ -293,20 +293,31 @@ ${changesSummary}
 RAG 분석 결과, 다음 파일들이 영향받을 가능성이 있습니다:
 ${candidatesList}
 
-당신의 임무는 실제 코드를 읽고 분석하여 이 변경사항이 다른 파일들에 어떤 영향을 미치는지 파악하는 것입니다.
+**중요 지침:**
+1. 사용 가능한 Tool은 read_file, list_files, search_code, get_file_info, search_similar_code 5개만 있습니다.
+2. 파일을 읽거나 검색이 필요할 때만 Tool을 호출하세요.
+3. 중간 설명이나 생각하는 과정은 Tool 없이 일반 텍스트로 출력하세요.
+
+**Tool 사용 예시:**
+- read_file 사용: {"name": "read_file", "arguments": {"path": "src/utils/helpers.ts"}}
+- search_code 사용: {"name": "search_code", "arguments": {"pattern": "buildWhereConditions", "file_pattern": ".ts", "max_results": 10}}
+- search_similar_code 사용: {"name": "search_similar_code", "arguments": {"query": "인증 관련 로직", "top_k": 5}}
+
+**주의:**
+- search_code는 pattern 파라미터만 필수입니다 (path, query, depth 같은 파라미터는 없습니다)
+- 파일 확장자는 file_pattern으로 지정합니다 (예: ".ts", ".js")
+- Tool 이름은 정확히 위의 5개 중 하나여야 합니다
 
 분석 절차:
-1. 변경된 주요 파일들을 read_file tool로 읽어서 어떤 변경이 있는지 확인
-2. 영향받을 가능성이 있는 후보 파일들도 read_file로 확인
-3. 필요하다면 search_code로 특정 함수나 클래스 사용처 검색
-4. 분석 결과를 구체적으로 요약
+1. 먼저 어떤 파일을 확인할지 간단히 설명 (일반 텍스트)
+2. read_file로 해당 파일들 읽기
+3. 필요시 search_code로 함수/클래스 검색 (pattern 파라미터 사용)
+4. 분석 결과를 텍스트로 요약
 
-최종적으로 다음을 포함하여 답변하세요:
+최종 응답에 포함할 내용:
 - 실제로 영향받는 파일들과 그 이유
 - 잠재적 Breaking Changes가 있다면 명시
-- 사용자가 주의해야 할 점
-
-Tool을 적극적으로 사용하여 실제 코드를 확인하세요.`;
+- 사용자가 주의해야 할 점`;
 
     try {
       // 초기 프롬프트 출력
@@ -351,58 +362,100 @@ Tool을 적극적으로 사용하여 실제 코드를 확인하세요.`;
 
         // Tool calls 확인
         if (response.tool_calls && response.tool_calls.length > 0) {
-          console.log(`\n🔧 ${response.tool_calls.length}개의 Tool 호출 감지:`);
+          // 무시할 tool 패턴 (LLM이 해설을 위해 사용하는 가짜 tool들)
+          const ignoredToolPatterns = [
+            "assistant<|channel|>commentary",
+            "assistant<|channel|>think",
+            "assistant<|channel|>analyze",
+            "commentary",
+            "think",
+            "analyze",
+          ];
 
-          // Tool 결과 수집
-          const toolResults = [];
+          // 실제 유효한 tool call만 필터링
+          const validToolCalls = response.tool_calls.filter(
+            (tc: any) => !ignoredToolPatterns.includes(tc.name)
+          );
 
-          for (const toolCall of response.tool_calls) {
-            const argsStr = JSON.stringify(toolCall.args);
-            const argsPreview =
-              argsStr.length > 100
-                ? argsStr.substring(0, 100) + "..."
-                : argsStr;
-            console.log(`\n   📞 Tool: ${toolCall.name}`);
-            console.log(`      인자: ${argsPreview}`);
+          // 무시된 tool call이 있으면 로깅
+          const ignoredToolCalls = response.tool_calls.filter((tc: any) =>
+            ignoredToolPatterns.includes(tc.name)
+          );
 
-            // Tool 실행
-            const tool = tools.find((t) => t.name === toolCall.name);
-            if (tool) {
-              try {
-                const result = await tool.invoke(toolCall.args);
-
-                // 결과 미리보기 출력
-                const resultPreview =
-                  result.length > 200
-                    ? result.substring(0, 200) + "\n      ... (생략) ..."
-                    : result;
-                console.log(`      결과: ${resultPreview}`);
-
-                toolResults.push({
-                  role: "tool",
-                  content: result,
-                  tool_call_id: toolCall.id,
-                });
-              } catch (error) {
-                const errorMsg =
-                  error instanceof Error ? error.message : String(error);
-                console.error(`      ✗ 실패: ${errorMsg}`);
-                toolResults.push({
-                  role: "tool",
-                  content: `오류: ${errorMsg}`,
-                  tool_call_id: toolCall.id,
-                });
-              }
-            } else {
-              console.warn(`      ⚠️  Tool을 찾을 수 없음: ${toolCall.name}`);
-            }
+          if (ignoredToolCalls.length > 0) {
+            console.log(
+              `\n💭 해설용 Tool ${ignoredToolCalls.length}개 감지 (일반 텍스트로 처리):`
+            );
+            ignoredToolCalls.forEach((tc: any) => {
+              console.log(`   - ${tc.name}`);
+            });
           }
 
-          // 대화에 응답과 tool 결과 추가
-          conversation.push(response);
-          conversation.push(...toolResults);
+          if (validToolCalls.length > 0) {
+            console.log(`\n🔧 ${validToolCalls.length}개의 유효한 Tool 호출:`);
 
-          console.log(`\n✅ Tool 실행 완료, 다음 반복으로 계속...`);
+            // Tool 결과 수집
+            const toolResults = [];
+
+            for (const toolCall of validToolCalls) {
+              const argsStr = JSON.stringify(toolCall.args);
+              const argsPreview =
+                argsStr.length > 100
+                  ? argsStr.substring(0, 100) + "..."
+                  : argsStr;
+              console.log(`\n   📞 Tool: ${toolCall.name}`);
+              console.log(`      인자: ${argsPreview}`);
+
+              // Tool 실행
+              const tool = tools.find((t) => t.name === toolCall.name);
+              if (tool) {
+                try {
+                  const result = await tool.invoke(toolCall.args);
+
+                  // 결과 미리보기 출력
+                  const resultPreview =
+                    result.length > 200
+                      ? result.substring(0, 200) + "\n      ... (생략) ..."
+                      : result;
+                  console.log(`      결과: ${resultPreview}`);
+
+                  toolResults.push({
+                    role: "tool",
+                    content: result,
+                    tool_call_id: toolCall.id,
+                  });
+                } catch (error) {
+                  const errorMsg =
+                    error instanceof Error ? error.message : String(error);
+                  console.error(`      ✗ 실패: ${errorMsg}`);
+                  toolResults.push({
+                    role: "tool",
+                    content: `오류: ${errorMsg}`,
+                    tool_call_id: toolCall.id,
+                  });
+                }
+              } else {
+                console.warn(`      ⚠️  Tool을 찾을 수 없음: ${toolCall.name}`);
+              }
+            }
+
+            // 대화에 응답과 tool 결과 추가
+            conversation.push(response);
+            conversation.push(...toolResults);
+
+            console.log(`\n✅ Tool 실행 완료, 다음 반복으로 계속...`);
+          } else {
+            // 모든 tool call이 무시되었으면 일반 응답으로 처리
+            console.log(`\n💭 모든 Tool이 해설용이므로 무시하고 다시 요청`);
+
+            // 해설용 tool call은 대화에 추가하지 않음 (메시지 형식 에러 방지)
+            // 대신 바로 다시 분석 요청
+            conversation.push({
+              role: "user",
+              content:
+                "해설이 아닌 실제 분석을 진행해주세요. read_file, search_code, search_similar_code 등의 Tool을 사용하여 파일을 확인하거나, 최종 분석 결과를 텍스트로 작성해주세요.",
+            });
+          }
         } else {
           // Tool call이 없으면 최종 응답 또는 계속 진행
           if (responseContent && responseContent.trim().length > 0) {

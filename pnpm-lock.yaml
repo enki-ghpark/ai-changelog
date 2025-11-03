@@ -9,38 +9,38 @@ importers:
   .:
     dependencies:
       '@langchain/community':
-        specifier: ^0.3.0
+        specifier: ^0.3.57
         version: 0.3.57(@browserbasehq/sdk@2.6.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.56.1)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@5.12.2(ws@8.18.3)(zod@4.1.12))(zod@4.1.12))(@ibm-cloud/watsonx-ai@1.7.2)(@langchain/core@0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12)))(@langchain/ollama@0.1.6(@langchain/core@0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12))))(axios@1.13.1)(ibm-cloud-sdk-core@5.4.3)(jsonwebtoken@9.0.2)(openai@5.12.2(ws@8.18.3)(zod@4.1.12))(playwright@1.56.1)(weaviate-client@3.9.0)(ws@8.18.3)
       '@langchain/core':
-        specifier: ^0.3.0
+        specifier: ^0.3.79
         version: 0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12))
       '@langchain/ollama':
-        specifier: ^0.1.0
+        specifier: ^0.1.6
         version: 0.1.6(@langchain/core@0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12)))
       '@octokit/rest':
-        specifier: ^21.0.0
+        specifier: ^21.1.1
         version: 21.1.1
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
       langchain:
-        specifier: ^0.3.0
+        specifier: ^0.3.36
         version: 0.3.36(@langchain/core@0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12)))(@langchain/ollama@0.1.6(@langchain/core@0.3.79(openai@5.12.2(ws@8.18.3)(zod@4.1.12))))(axios@1.13.1)(openai@5.12.2(ws@8.18.3)(zod@4.1.12))(ws@8.18.3)
       zod:
         specifier: ^4.1.12
         version: 4.1.12
     devDependencies:
       '@types/node':
-        specifier: ^22.0.0
+        specifier: ^22.18.13
         version: 22.18.13
       tsx:
-        specifier: ^4.0.0
+        specifier: ^4.20.6
         version: 4.20.6
       typescript:
-        specifier: ^5.6.0
+        specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^2.0.0
+        specifier: ^2.1.9
         version: 2.1.9(@types/node@22.18.13)
 
 packages:
@@ -1012,6 +1012,9 @@ packages:
 
   '@types/node@22.18.13':
     resolution: {integrity: sha512-Bo45YKIjnmFtv6I1TuC8AaHBbqXtIo+Om5fE4QiU1Tj8QR/qt+8O3BAtOimG5IFmwaWiPmB3Mv3jtYzBA4Us2A==}
+
+  '@types/node@22.19.0':
+    resolution: {integrity: sha512-xpr/lmLPQEj+TUnHmR+Ab91/glhJvsqcjB+yY0Ix9GO70H6Lb4FHH5GeqdOE5btAx7eIMwuHkp4H2MSkLcqWbA==}
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
@@ -2368,7 +2371,7 @@ snapshots:
 
   '@types/node-fetch@2.6.13':
     dependencies:
-      '@types/node': 22.18.13
+      '@types/node': 22.19.0
       form-data: 4.0.4
 
   '@types/node@18.19.130':
@@ -2376,6 +2379,10 @@ snapshots:
       undici-types: 5.26.5
 
   '@types/node@22.18.13':
+    dependencies:
+      undici-types: 6.21.0
+
+  '@types/node@22.19.0':
     dependencies:
       undici-types: 6.21.0
 
@@ -2742,7 +2749,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.2
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.13.1(debug@4.4.3))
+      retry-axios: 2.6.0(axios@1.13.1)
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -2981,7 +2988,7 @@ snapshots:
 
   resolve-pkg-maps@1.0.0: {}
 
-  retry-axios@2.6.0(axios@1.13.1(debug@4.4.3)):
+  retry-axios@2.6.0(axios@1.13.1):
     dependencies:
       axios: 1.13.1(debug@4.4.3)
 
