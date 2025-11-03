@@ -272,7 +272,7 @@ export class ChangelogGenerator {
 
         for (const identifier of input.identifiers) {
           try {
-            const docs = await retriever.getRelevantDocuments(identifier);
+            const docs = await retriever.invoke(identifier);
 
             for (const doc of docs) {
               const foundFile = doc.metadata.filename;
