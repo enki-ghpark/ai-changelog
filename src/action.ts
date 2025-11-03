@@ -80,7 +80,14 @@ async function run() {
     core.info(`🚀 CHANGELOG 생성 시작`);
     core.info(`📦 Repository: ${repository}`);
     core.info(`🏷️  Release Tag: ${releaseTag}`);
-    core.info(`🌐 Ollama URL: ${ollamaBaseUrl}`);
+    if (ollamaUrls.length > 1) {
+      core.info(`🌐 Ollama 서버: ${ollamaUrls.length}개 (병렬 처리)`);
+      ollamaUrls.forEach((url, idx) => {
+        core.info(`   [${idx + 1}] ${url}`);
+      });
+    } else {
+      core.info(`🌐 Ollama URL: ${ollamaBaseUrl}`);
+    }
     core.info(`🤖 Ollama Model: ${ollamaModel}`);
     core.info(`📊 Embedding Model: ${ollamaEmbeddingModel}`);
     core.info(`🔍 RAG: ${enableRAG ? "활성화" : "비활성화"}`);
@@ -128,6 +135,7 @@ async function run() {
         chunkSize: 1000,
         chunkOverlap: 200,
         topK: 5,
+        serverUrls: ollamaUrls.length > 1 ? ollamaUrls : undefined, // 병렬 처리용
       };
       ragService = new RAGService(ragConfig);
 
