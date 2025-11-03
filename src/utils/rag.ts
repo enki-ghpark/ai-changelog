@@ -6,6 +6,7 @@ import type { RAGConfig, FileChange } from "../types.js";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { OllamaEmbeddingsBalancer } from "./ollama-embeddings-balancer.js";
 
 interface CachedEmbedding {
   hash: string;
@@ -18,7 +19,7 @@ interface CachedEmbedding {
 }
 
 export class RAGService {
-  private embeddings: OllamaEmbeddings;
+  private embeddings: OllamaEmbeddings | OllamaEmbeddingsBalancer;
   private vectorStore: MemoryVectorStore | null = null;
   private textSplitter: RecursiveCharacterTextSplitter;
   private config: RAGConfig;
@@ -33,11 +34,18 @@ export class RAGService {
       mkdirSync(this.cacheDir, { recursive: true });
     }
 
-    // Ollama 임베딩 모델 초기화
-    this.embeddings = new OllamaEmbeddings({
-      baseUrl: config.ollamaBaseUrl,
-      model: config.embeddingModel,
-    });
+    // Ollama 임베딩 모델 초기화 (로드 밸런싱 지원)
+    if (config.serverUrls && config.serverUrls.length > 1) {
+      this.embeddings = new OllamaEmbeddingsBalancer(
+        config.serverUrls,
+        config.embeddingModel
+      );
+    } else {
+      this.embeddings = new OllamaEmbeddings({
+        baseUrl: config.ollamaBaseUrl,
+        model: config.embeddingModel,
+      });
+    }
 
     // 텍스트 스플리터 초기화
     this.textSplitter = new RecursiveCharacterTextSplitter({
@@ -210,37 +218,109 @@ export class RAGService {
       }% 절약)`
     );
 
-    // 캐시되지 않은 문서들의 임베딩 생성 (배치 처리)
+    // 캐시되지 않은 문서들의 임베딩 생성 (병렬 배치 처리)
     if (uncachedDocuments.length > 0) {
       console.log(
         `🔄 ${uncachedDocuments.length}개의 새 문서 임베딩 생성 중...`
       );
 
       const BATCH_SIZE = 20;
-      const batches = [];
+      const batches: Document[][] = [];
       for (let i = 0; i < uncachedDocuments.length; i += BATCH_SIZE) {
         batches.push(uncachedDocuments.slice(i, i + BATCH_SIZE));
       }
 
+      // 서버 수 감지 (로드 밸런서인 경우)
+      const concurrency = (this.embeddings as any).servers?.length || 1;
+
+      if (concurrency > 1) {
+        console.log(`⚡ ${concurrency}개 서버로 병렬 처리 시작...`);
+      } else {
+        console.log(`⚡ 단일 서버로 순차 처리...`);
+      }
+
       const newEmbeddings: number[][] = [];
-      for (let i = 0; i < batches.length; i++) {
-        try {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          console.log(
-            `⏳ 배치 ${i + 1}/${batches.length} 처리 중... (${
-              batches[i].length
-            }개 문서)`
-          );
 
-          const texts = batches[i].map((doc) => doc.pageContent);
-          const batchEmbeddings = await this.embeddings.embedDocuments(texts);
-          newEmbeddings.push(...batchEmbeddings);
+      // 워커 풀 패턴: 워커마다 전담 서버 할당
+      const results: Array<{ index: number; embeddings: number[][] }> = [];
+      let nextBatchIndex = 0;
 
-          console.log(`✅ 배치 ${i + 1}/${batches.length} 완료`);
-        } catch (error) {
-          console.error(`❌ 배치 ${i + 1}/${batches.length} 실패:`, error);
-          throw error;
+      // 워커 함수: 작업 큐에서 계속 가져와서 처리
+      const worker = async (workerId: number) => {
+        // 이 워커 전용 임베딩 인스턴스 (특정 서버에 고정)
+        const workerEmbeddings =
+          concurrency > 1 && (this.embeddings as any).servers
+            ? (this.embeddings as any).servers[workerId]
+            : this.embeddings;
+
+        while (nextBatchIndex < batches.length) {
+          const currentIndex = nextBatchIndex++;
+          const batch = batches[currentIndex];
+
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            if (concurrency > 1) {
+              console.log(
+                `🔥 워커 ${workerId + 1} (서버 ${workerId + 1}) → 배치 ${
+                  currentIndex + 1
+                } 시작`
+              );
+            }
+            console.log(
+              `⏳ 배치 ${currentIndex + 1}/${batches.length} 처리 중... (${
+                batch.length
+              }개 문서)`
+            );
+
+            const texts = batch.map((doc: Document) => doc.pageContent);
+
+            // 시간 측정 시작
+            const startTime = Date.now();
+
+            // 워커 전용 임베딩 인스턴스 사용
+            const batchEmbeddings = await workerEmbeddings.embedDocuments(
+              texts
+            );
+
+            const elapsed = Date.now() - startTime;
+            const perDoc = Math.round(elapsed / batch.length);
+
+            if (concurrency > 1) {
+              console.log(
+                `      ✓ 워커 ${workerId + 1} (서버 ${
+                  workerId + 1
+                }) 완료: ${elapsed}ms, ${perDoc}ms/문서`
+              );
+            }
+            console.log(`✅ 배치 ${currentIndex + 1}/${batches.length} 완료`);
+
+            results.push({ index: currentIndex, embeddings: batchEmbeddings });
+          } catch (error) {
+            console.error(
+              `❌ 배치 ${currentIndex + 1}/${batches.length} 실패:`,
+              error
+            );
+            throw error;
+          }
         }
+      };
+
+      // concurrency 개수만큼 워커 생성 및 실행
+      const workers = Array(concurrency)
+        .fill(null)
+        .map((_, i) => worker(i));
+
+      // 모든 워커가 완료될 때까지 대기
+      await Promise.all(workers);
+
+      if (concurrency > 1) {
+        console.log(`✨ 모든 배치 병렬 처리 완료!`);
+      }
+
+      // 결과를 인덱스 순서대로 정렬하여 임베딩 추가
+      results.sort((a, b) => a.index - b.index);
+      for (const result of results) {
+        newEmbeddings.push(...result.embeddings);
       }
 
       // 파일별로 캐시 저장 (청크와 임베딩을 함께)
@@ -433,24 +513,37 @@ export class RAGService {
   }
 
   /**
-   * 파일 변경사항 기반으로 영향받는 파일을 분석합니다
+   * 파일 변경사항 기반으로 영향받을 가능성 있는 파일 후보를 찾습니다
+   * (가벼운 탐색: 상세 내용은 Tool calling으로)
    */
-  async generateCodeContext(fileChanges: FileChange[]): Promise<string[]> {
-    console.log("🔎 변경사항이 영향을 미치는 파일 분석 중...");
+  async findAffectedFileCandidates(fileChanges: FileChange[]): Promise<
+    Array<{
+      filename: string;
+      identifier: string;
+      reason: string;
+      score?: number;
+    }>
+  > {
+    console.log("🔎 영향받을 가능성 있는 파일 후보 탐색 중...");
 
     if (!this.vectorStore) {
       console.warn("⚠️  벡터 스토어가 초기화되지 않았습니다");
       return [];
     }
 
-    const impactAnalysis: string[] = [];
-    const affectedFiles = new Set<string>();
+    const candidates: Array<{
+      filename: string;
+      identifier: string;
+      reason: string;
+      score?: number;
+    }> = [];
+    const seenFiles = new Set<string>();
 
     // 주요 변경 파일 선택 (변경 라인 수 기준)
     const topFiles = fileChanges
       .filter((f) => f.content || f.patch)
       .sort((a, b) => b.changes - a.changes)
-      .slice(0, 10); // 상위 10개 파일만 분석
+      .slice(0, 5); // 상위 5개 파일만 분석 (10개 → 5개로 축소)
 
     console.log(`📊 ${topFiles.length}개의 주요 변경 파일 분석 중...`);
 
@@ -464,13 +557,12 @@ export class RAGService {
 
       console.log(`  📄 ${file.filename}: ${identifiers.length}개 식별자 발견`);
 
-      // 2. 각 식별자를 사용하는 다른 파일 검색
-      for (const identifier of identifiers.slice(0, 5)) {
-        // 상위 5개만
+      // 2. 상위 3개 식별자만 사용 (5개 → 3개로 축소)
+      for (const identifier of identifiers.slice(0, 3)) {
         try {
           const results = await this.vectorStore.similaritySearch(
             identifier,
-            3 // 각 식별자당 상위 3개 결과
+            2 // 각 식별자당 상위 2개 결과 (3개 → 2개로 축소)
           );
 
           for (const doc of results) {
@@ -480,26 +572,24 @@ export class RAGService {
             if (
               foundFile &&
               foundFile !== file.filename &&
-              !affectedFiles.has(foundFile)
+              !seenFiles.has(foundFile)
             ) {
-              affectedFiles.add(foundFile);
+              seenFiles.add(foundFile);
 
-              // 영향 분석 결과 저장
-              const impact =
-                `**${identifier}** (${file.filename}에서 변경)\n` +
-                `  → \`${foundFile}\`에서 사용됨\n` +
-                `  → 잠재적 영향: 이 파일도 검토가 필요할 수 있습니다`;
+              candidates.push({
+                filename: foundFile,
+                identifier: identifier,
+                reason: `${file.filename}에서 변경된 ${identifier}를 사용`,
+              });
 
-              impactAnalysis.push(impact);
-
-              // 너무 많은 결과 방지
-              if (impactAnalysis.length >= 15) {
+              // 최대 7개 후보만 (15개 → 7개로 축소)
+              if (candidates.length >= 7) {
                 break;
               }
             }
           }
 
-          if (impactAnalysis.length >= 15) {
+          if (candidates.length >= 7) {
             break;
           }
         } catch (error) {
@@ -507,14 +597,14 @@ export class RAGService {
         }
       }
 
-      if (impactAnalysis.length >= 15) {
+      if (candidates.length >= 7) {
         break;
       }
     }
 
-    console.log(`✅ ${affectedFiles.size}개의 영향받는 파일 발견`);
+    console.log(`✅ ${candidates.length}개의 파일 후보 발견`);
 
-    return impactAnalysis;
+    return candidates;
   }
 
   /**

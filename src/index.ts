@@ -1,6 +1,7 @@
 import { GitHubService } from "./utils/github.js";
 import { ChangelogGenerator } from "./utils/changelog.js";
 import { RAGService } from "./utils/rag.js";
+import { CodeAnalysisToolExecutor } from "./utils/tools.js";
 import type {
   GitHubConfig,
   OllamaConfig,
@@ -21,6 +22,11 @@ async function main() {
   const enableRAG = process.env.ENABLE_RAG !== "false"; // 기본적으로 활성화
   const repository = process.env.GITHUB_REPOSITORY;
   const releaseTag = process.env.RELEASE_TAG;
+
+  // Ollama 서버 URL 파싱 (쉼표로 구분된 여러 서버 지원)
+  const ollamaServerUrls = process.env.OLLAMA_SERVERS
+    ? process.env.OLLAMA_SERVERS.split(",").map((url) => url.trim())
+    : undefined;
 
   if (!githubToken) {
     console.error("❌ GITHUB_TOKEN 환경 변수가 설정되지 않았습니다");
@@ -45,7 +51,14 @@ async function main() {
 
   console.log(`📦 저장소: ${owner}/${repo}`);
   console.log(`🏷️  릴리즈 태그: ${releaseTag}`);
-  console.log(`🤖 Ollama 서버: ${ollamaBaseUrl}`);
+  if (ollamaServerUrls && ollamaServerUrls.length > 1) {
+    console.log(`🤖 Ollama 서버: ${ollamaServerUrls.length}개 (로드 밸런싱)`);
+    ollamaServerUrls.forEach((url, idx) => {
+      console.log(`   [${idx + 1}] ${url}`);
+    });
+  } else {
+    console.log(`🤖 Ollama 서버: ${ollamaBaseUrl}`);
+  }
   console.log(`🧠 모델: ${ollamaModel}`);
   console.log(`🔍 RAG 활성화: ${enableRAG ? "예" : "아니오"}\n`);
 
@@ -62,6 +75,7 @@ async function main() {
     const ollamaConfig: OllamaConfig = {
       baseUrl: ollamaBaseUrl,
       model: ollamaModel,
+      serverUrls: ollamaServerUrls, // 로드 밸런싱용 서버 목록
     };
     const changelogGenerator = new ChangelogGenerator(ollamaConfig);
 
@@ -96,6 +110,7 @@ async function main() {
         chunkSize: 1000,
         chunkOverlap: 200,
         topK: 5,
+        serverUrls: ollamaServerUrls, // 로드 밸런싱용 서버 목록
       };
       ragService = new RAGService(ragConfig);
 
@@ -134,14 +149,45 @@ async function main() {
       "codeContext" in changelogData
     ) {
       try {
-        const retriever = ragService.getRetriever(3);
-        changelog = await changelogGenerator.generateEnhanced(
-          changelogData as EnhancedChangelogData,
-          retriever
+        const enhancedData = changelogData as EnhancedChangelogData;
+
+        // 1. RAG로 영향받을 가능성 있는 파일 후보 탐색
+        console.log("📋 RAG로 영향 파일 후보 탐색 중...");
+        const candidates = await ragService.findAffectedFileCandidates(
+          enhancedData.fileChanges
         );
+
+        if (candidates.length > 0) {
+          console.log(`✅ ${candidates.length}개의 후보 파일 발견`);
+
+          // 2. Tool executor 초기화
+          const toolExecutor = new CodeAnalysisToolExecutor(
+            githubService,
+            releaseTag
+          );
+
+          // 3. Tool calling 기반 CHANGELOG 생성
+          console.log("🔧 Tool calling 기반 상세 분석 시작...");
+          changelog = await changelogGenerator.generateWithTools(
+            enhancedData,
+            candidates,
+            toolExecutor
+          );
+
+          // 캐시 정리
+          toolExecutor.clearCache();
+        } else {
+          // 후보가 없으면 기존 RAG 방식 사용
+          console.log("⚠️  영향 파일 후보가 없어 기본 RAG 방식 사용");
+          const retriever = ragService.getRetriever(3);
+          changelog = await changelogGenerator.generateEnhanced(
+            enhancedData,
+            retriever
+          );
+        }
       } catch (error) {
         console.warn(
-          "⚠️  RAG 기반 CHANGELOG 생성 실패, 기본 생성기 사용",
+          "⚠️  Tool calling 기반 CHANGELOG 생성 실패, 기본 생성기 사용",
           error
         );
         changelog = await changelogGenerator.generate(changelogData);

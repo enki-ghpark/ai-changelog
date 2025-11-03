@@ -28,8 +28,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/embeddings
-          key: embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.run_id }}
+          # 소스 코드가 변경되면 캐시 무효화 (릴리즈 태그도 포함하여 각 릴리즈마다 별도 캐시)
+          key: embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.event.release.tag_name }}-${{ hashFiles('**/*.ts', '**/*.js', '**/*.json') }}
           restore-keys: |
+            embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-${{ github.event.release.tag_name }}-
             embeddings-cache-${{ vars.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text' }}-
             embeddings-cache-
 

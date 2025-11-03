@@ -73,6 +73,7 @@ export interface OllamaConfig {
   baseUrl: string;
   model: string;
   embeddingModel?: string; // 임베딩 모델 (기본값: nomic-embed-text)
+  serverUrls?: string[]; // 로드 밸런싱용 여러 서버 URL (설정 시 baseUrl 대신 사용)
 }
 
 export interface RAGConfig {
@@ -81,5 +82,49 @@ export interface RAGConfig {
   chunkSize: number; // 청크 크기 (토큰 단위)
   chunkOverlap: number; // 청크 오버랩
   topK: number; // 검색할 관련 문서 수
+  serverUrls?: string[]; // 로드 밸런싱용 여러 서버 URL (설정 시 ollamaBaseUrl 대신 사용)
+}
+
+// Tool 시스템 타입
+export interface Tool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, any>;
+      required?: string[];
+    };
+  };
+}
+
+export interface ToolCall {
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export interface ToolResult {
+  success: boolean;
+  result?: string;
+  error?: string;
+}
+
+export interface ToolExecutor {
+  execute(toolName: string, args: Record<string, any>): Promise<string>;
+  getTools(): Tool[];
+}
+
+// RAG 영향 분석 관련 타입
+export interface AffectedFileCandidate {
+  filename: string;
+  identifier: string;
+  reason: string;
+  score?: number;
+}
+
+export interface ImpactAnalysis {
+  candidates: AffectedFileCandidate[];
+  detailedAnalysis?: string;
 }
 
